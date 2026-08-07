@@ -102,7 +102,7 @@ func (repository *Repository) EvaluationContext(ctx context.Context, versionID V
 }
 
 func (repository *Repository) RecordEvaluation(ctx context.Context, evaluation Evaluation) (Evaluation, error) {
-	if err := validateEvaluationShape(evaluation); err != nil {
+	if err := ValidateEvaluation(evaluation); err != nil {
 		return Evaluation{}, err
 	}
 	if err := repository.evaluations.RecordEvaluation(ctx, evaluation); err != nil {
@@ -170,7 +170,9 @@ func (ledger *transientLedger) RecordEvaluation(_ context.Context, evaluation Ev
 	return nil
 }
 
-func validateEvaluationShape(evaluation Evaluation) error {
+// ValidateEvaluation checks the storage-independent shape and identity
+// invariants of an Evaluation.
+func ValidateEvaluation(evaluation Evaluation) error {
 	if evaluation.VersionID == "" || evaluation.GoverningIntent == "" || len(evaluation.PolicyEvaluations) == 0 {
 		return errors.New("evaluation requires Version, governing Intent, and evaluations")
 	}
@@ -231,7 +233,7 @@ func validateEvaluationState(
 	pending map[VersionID]struct{},
 	evaluation Evaluation,
 ) error {
-	if err := validateEvaluationShape(evaluation); err != nil {
+	if err := ValidateEvaluation(evaluation); err != nil {
 		return err
 	}
 	version, found := versions[evaluation.VersionID]
