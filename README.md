@@ -1,109 +1,65 @@
 # GRD
 
-Adaptive version control: a VCS for adaptive apps.
+**Adaptive version control for adaptive apps.**
 
-GRD treats acceptance as repository state. Contributors propose immutable
-Versions; the repository evaluates them against accepted guidance, derives
-Requirements when action is needed, records Responses, and promotes only when
-the current evidence permits it.
+GRD (pronounced “grid”) makes acceptance part of repository state. Instead of
+forcing every change through the same fixed workflow, it evaluates the exact
+proposed Version against guidance already accepted by the repository and
+decides what evidence or action is needed next.
 
-Read the canonical [product vision](docs/vision.md) before making product or
-architecture decisions.
+```text
+propose → evaluate → respond or revise → promote → reconcile
+```
 
-This public foundation contains the engine-neutral kernel:
+A contributor proposes an immutable commit. GRD evaluates it, promotes it when
+the evidence permits, or creates a Requirement for a person or agent to answer.
+Every Evaluation, Requirement, Response, and Promotion becomes durable history.
+Concurrent work can then be reconciled against the newly accepted Intent
+without losing how the decision was made.
 
-- Intent, Change, Version, and promotion identity;
-- immutable Evaluations, Requirements, and Responses;
-- dependency, amendment, and reconciliation mechanics;
-- durable-store and content-engine contracts; and
-- provider-neutral evaluation scheduling and policy interpretation.
+Git is the first content engine, but the decision model is not Git-specific.
+Evaluators are ordinary external commands and are not tied to a model provider.
+The deeper product and architecture principles live in the
+[vision](docs/vision.md).
 
-It also includes `internal/ledgerfs`, a durable local adapter that records the
-repository decision history as an exclusively locked, append-only JSONL
-journal. It syncs each accepted event before applying it in memory and
-validates the complete history during restart replay.
+## Try it
 
-`internal/gitengine` is the first content-engine adapter. It pins each admitted
-Version's commit under private `refs/grd/versions/` refs, keeps that namespace
-hidden from Git clients, and advances trunk with Git's atomic compare-and-swap
-ref update. The repository can therefore reconcile an interrupted promotion
-across both the durable ledger and the Git projection after restart.
-Opening the adapter persists the private-ref rule in local Git configuration
-and refuses configurations that could override it.
-
-`internal/gitreader` supplies the read side of the Git boundary. It reads
-accepted UTF-8 guidance from exact commits and produces bounded, deterministic
-change evidence without external diff drivers or text conversion.
-
-`internal/evaluatorprotocol` and `internal/evaluatorexec` provide the first
-real evaluator boundary: one versioned JSON request on stdin and one versioned
-JSON result on stdout. Evaluators are ordinary external commands, receive only
-an explicitly configured environment plus `PATH`, and remain independent of
-model or provider choice. The wire contract is documented in
-[`docs/evaluator-protocol.md`](docs/evaluator-protocol.md).
-
-`grds` is the first runtime composition. It hosts one existing Git repository,
-opens its durable filesystem ledger, evaluates pending Versions through an
-external evaluator, and reconciles atomic trunk promotion across restarts. The
-command keeps repository identity opaque and forwards evaluator environment
-variables only when named explicitly; the evaluator adapter also supplies
-`PATH` when it was not named.
-
-`internal/controlhttp` is the first transport adapter. When explicitly enabled,
-`grds` exposes accepted Intent, idempotent proposal and reconciliation writes,
-Requirement inbox and Response operations, exact-Version and Change inspection,
-and cursorable durable history over a loopback-only HTTP endpoint. The `grd`
-client validates each versioned fact or receipt and writes JSON to stdout. The
-contract is documented in
-[`docs/control-http.md`](docs/control-http.md).
-
-`internal/gitworkspace` is the first contributor-side VCS adapter. `grd submit`
-turns a clean committed Git workspace into a Version, `grd status` derives its
-relationship to accepted Intent from Git and durable facts, and `grd sync`
-rebases stale held work onto current Intent while recording the replacement
-Version and reconciliation rationale.
-
-VCS engines own content representation. Evaluators interpret repository
-guidance. GRD owns the durable decision history between them.
-
-## Status
-
-This is a locally operable single-repository milestone with multiple concurrent
-Changes under one configured local principal, not yet a networked distribution.
-A local actor can submit a clean Git commit, inspect accepted Intent or a
-Version, read assigned Requirements, record an idempotent Response, watch
-durable history, and reconcile a stale held branch onto newly accepted Intent.
-Low-level commands also expose amendment, dependency, and conflict facts.
-
-The HTTP endpoint is deliberately restricted to loopback and has no
-authentication. Commit objects must already exist in the server's Git object
-database; GRD does not yet publish them over a Git remote. It also lacks shared
-or hosted persistence, network identity and authorization, model-provider
-adapters, deployment configuration, persistent divergence, and a polished
-human interface. `grd sync` covers the common one-step held-Version and accepted
-Amendment paths; more complex reconciliation remains explicit through the
-lower-level commands. Packages remain under `internal/` until their public API
-has earned a stable shape.
-
-The filesystem ledger is single-host, single-process storage. It replays its
-history into memory at open and is not a substitute for shared or distributed
-persistence. File locking is currently supported on operating systems with
-`flock(2)`; unsupported systems fail before creating the journal.
-
-## Development
-
-Requires Go 1.26.5 or newer. Git-backed tests also require `git` on `PATH`.
-Executable integration tests use a POSIX shell where supported.
+The fastest way to see the current loop is the disposable local rehearsal:
 
 ```sh
-go test ./...
+./scripts/smoke-adaptive-loop.sh
 ```
+
+It creates a real Git repository, starts `grds`, submits two concurrent Changes,
+holds one for a Requirement, records a Response, promotes both in turn, and
+reconciles the stale workspace. Everything runs locally under one configured
+principal. See the [local playground](docs/local-playground.md) for the story
+and expected output.
+
+Requires Go 1.26.5 or newer, Git on `PATH`, and a POSIX shell.
+
+## What works today
+
+- `grds` hosts one existing Git repository with a durable append-only ledger.
+- `grd` can submit work and inspect Intent, Versions, Changes, and workspace
+  status.
+- Requirements and idempotent Responses provide the human-or-agent action loop.
+- Durable history can be listed or watched using resumable cursors.
+- Exact commits are evaluated by an external, provider-neutral command.
+- Promotion advances trunk atomically and recovers safely across restarts.
+- Held work can be reconciled onto current Intent with `grd sync`.
+
+The settled vocabulary is small: **Intent** is the accepted repository state;
+a **Change** is a line of proposed work; a **Version** is one exact candidate;
+an **Evaluation** records judgement; a **Requirement** asks for action; a
+**Response** answers it; **Promotion** accepts a Version; and
+**reconciliation** adapts held work to newer Intent.
 
 ## Run one repository
 
-The Git branch must already exist, and its accepted commit must contain
-`.grd/purpose.md` and `.grd/priorities.md`. The evaluator follows the external
-JSON contract linked above.
+The accepted commit must already contain `.grd/purpose.md` and
+`.grd/priorities.md`, and candidate commit objects must exist in the server's
+Git object database. Start the server with an external evaluator:
 
 ```sh
 go run ./cmd/grds \
@@ -116,30 +72,56 @@ go run ./cmd/grds \
   --producer principal:player
 ```
 
-Use repeatable `--evaluator-env NAME` flags to forward named environment
-variables in addition to the evaluator's default `PATH`. `--listen` is
-optional and accepts only a numeric loopback address and port; port `0` asks
-the operating system to choose a free port. Enabling it also requires an opaque
-canonical `--producer` principal for local write provenance and Requirement
-authority. On successful
-startup, `grds`
-writes one `grd.host-ready/v1` JSON object to stdout; when local HTTP is enabled,
-its `control` field contains the chosen server URL. Runtime diagnostics go to
-stderr. SIGINT and SIGTERM stop the HTTP server and evaluator workers and
-release the ledger lock. The readiness schema is documented in
-[`docs/host-ready.md`](docs/host-ready.md).
-
-Inspect accepted Intent using the advertised URL:
+On startup, `grds` writes one `grd.host-ready/v1` JSON object to stdout. Its
+`control` field contains the chosen local URL. Use that URL with the client:
 
 ```sh
 go run ./cmd/grd intent --server http://127.0.0.1:12345
+go run ./cmd/grd status --server http://127.0.0.1:12345
+go run ./cmd/grd submit --server http://127.0.0.1:12345
+go run ./cmd/grd requirements --server http://127.0.0.1:12345
+go run ./cmd/grd history --server http://127.0.0.1:12345
 ```
 
-For disposable real-Git rehearsals, use the
-[local playground](docs/local-playground.md). The adaptive rehearsal runs two
-concurrent branches under that principal through Requirements, Responses,
-Promotion, and recorded reconciliation:
+Use repeatable `--evaluator-env NAME` flags to forward named environment
+variables in addition to `PATH`. `--listen` accepts only a numeric loopback
+address; port `0` chooses a free port. SIGINT and SIGTERM stop the server and
+workers cleanly.
+
+Protocol details:
+
+- [evaluator protocol](docs/evaluator-protocol.md)
+- [local control protocol](docs/control-http.md)
+- [host readiness receipt](docs/host-ready.md)
+
+## Current limits
+
+This is a local, single-repository milestone—not yet a networked distribution.
+It supports concurrent Changes, but all local writes currently use one
+configured principal. The control endpoint is loopback-only and unauthenticated.
+GRD does not yet transfer Git objects, provide shared or hosted persistence,
+establish network identity and authorization, ship model-provider adapters,
+support persistent divergent personal versions, or offer a polished human
+interface.
+
+The filesystem ledger is single-host, single-process storage and replays its
+history into memory when opened. File locking requires an operating system with
+`flock(2)`. More complex reconciliation remains available through lower-level
+commands while the common held-Version path is developed into the primary user
+experience.
+
+## Architecture
+
+GRD core owns the adaptive decision loop and its durable history. Content
+engines, persistence, transports, evaluators, and contributor workspaces are
+adapters. That boundary keeps repository judgement portable while allowing Git,
+local files, HTTP, and executable evaluators to serve the current milestone.
+
+See the [vision](docs/vision.md) for the north star and the protocol documents
+above for current wire contracts.
+
+## Development
 
 ```sh
-./scripts/smoke-adaptive-loop.sh
+go test ./...
 ```
