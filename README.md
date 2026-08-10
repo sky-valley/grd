@@ -39,14 +39,23 @@ an explicitly configured environment plus `PATH`, and remain independent of
 model or provider choice. The wire contract is documented in
 [`docs/evaluator-protocol.md`](docs/evaluator-protocol.md).
 
+`grds` is the first runtime composition. It hosts one existing Git repository,
+opens its durable filesystem ledger, evaluates pending Versions through an
+external evaluator, and reconciles atomic trunk promotion across restarts. The
+command keeps repository identity opaque and forwards evaluator environment
+variables only when named explicitly; the evaluator adapter also supplies
+`PATH` when it was not named.
+
 VCS engines own content representation. Evaluators interpret repository
 guidance. GRD owns the durable decision history between them.
 
 ## Status
 
-This is a kernel, local-ledger, Git-engine, and evaluator-adapter snapshot, not
-yet a runnable distribution. It deliberately does not include the client,
-server, hosted control-store adapters, model providers, deployment
+This is a runnable single-repository composition milestone, not yet an
+operable local or networked distribution. It can recover and process pending
+Versions already present in its ledger, but it has no supported proposal,
+list, or watch interface yet. It deliberately does not include the client,
+authentication, hosted control-store adapters, model providers, deployment
 configuration, or rehearsal tooling. Packages remain under `internal/` until
 their public API has earned a stable shape.
 
@@ -63,3 +72,25 @@ Executable integration tests use a POSIX shell where supported.
 ```sh
 go test ./...
 ```
+
+## Run one repository
+
+The Git branch must already exist, and its accepted commit must contain
+`.grd/purpose.md` and `.grd/priorities.md`. The evaluator follows the external
+JSON contract linked above.
+
+```sh
+go run ./cmd/grds \
+  --repository repo_example \
+  --git-dir /path/to/repository/.git \
+  --ledger /path/to/grd/decision-loop.jsonl \
+  --trunk refs/heads/main \
+  --evaluator /path/to/evaluator
+```
+
+Use repeatable `--evaluator-env NAME` flags to forward named environment
+variables in addition to the evaluator's default `PATH`. On successful
+startup, `grds` writes one `grd.host-ready/v1` JSON object to stdout; runtime
+diagnostics go to stderr. SIGINT and SIGTERM stop the evaluator workers and
+release the ledger lock. The readiness schema is documented in
+[`docs/host-ready.md`](docs/host-ready.md).
