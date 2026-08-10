@@ -377,6 +377,207 @@ func TestClientInspectsAnExactVersion(t *testing.T) {
 	}
 }
 
+func TestRequirementsEndpointListsForConfiguredPrincipal(t *testing.T) {
+	service := &staticService{}
+	handler := newHandler(t, service)
+	request := httptest.NewRequest(http.MethodGet, "/v1/requirements?limit=25", nil)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	if service.pendingRequirementQuery.Assignee != "local:ion" || service.pendingRequirementQuery.Limit != 25 {
+		t.Fatalf("pending Requirement query = %#v", service.pendingRequirementQuery)
+	}
+}
+
+func TestRequirementResponseEndpointUsesConfiguredPrincipal(t *testing.T) {
+	service := &staticService{}
+	handler := newHandler(t, service)
+	body := bytes.NewBufferString(`{"schema":"grd.requirement-response/v1","version":"version_one","policy":"architecture","decision":"satisfied","rationale":"Reviewed the migration."}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/requirement-responses", body)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "response-one")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	if service.requirementResponseRequest.Assignee != "local:ion" {
+		t.Fatalf("Response assignee = %q, want configured principal", service.requirementResponseRequest.Assignee)
+	}
+}
+
+func TestClientPagesRequirementsAndRecordsAnExactResponse(t *testing.T) {
+	service := &staticService{
+		pendingRequirementPage: intent.PendingRequirementPage{
+			Requirements: []intent.Requirement{{
+				VersionID: "version_one",
+				Policy:    "architecture",
+				Assignee:  "local:ion",
+				Reason:    "The storage boundary changed.",
+				Evidence:  []string{"store.go"},
+			}},
+			NextCursor: intent.RequirementCursor{VersionID: "version_one", Policy: "architecture"},
+		},
+	}
+	server := httptest.NewServer(newHandler(t, service))
+	defer server.Close()
+	client := controlhttp.Client{Server: server.URL}
+
+	page, err := client.Requirements(context.Background(), "", 1)
+	if err != nil {
+		t.Fatalf("list Requirements: %v", err)
+	}
+	if len(page.Requirements) != 1 || page.Requirements[0].Version != "version_one" || page.NextCursor == "" {
+		t.Fatalf("Requirement page = %#v", page)
+	}
+	request := controlhttp.RequirementResponseRequest{
+		Schema:    controlhttp.RequirementResponseSchema,
+		Version:   "version_one",
+		Policy:    "architecture",
+		Decision:  "satisfied",
+		Rationale: "Reviewed the storage boundary.",
+	}
+	receipt, err := client.RespondRequirement(context.Background(), "response-one", request)
+	if err != nil {
+		t.Fatalf("respond to Requirement: %v", err)
+	}
+	if receipt.Response.Version != request.Version || receipt.Response.Policy != request.Policy || receipt.Response.Rationale != request.Rationale {
+		t.Fatalf("Response receipt = %#v", receipt)
+	}
+}
+
+func TestHistoryEndpointPagesDurableFacts(t *testing.T) {
+	service := &staticService{historyPage: intent.HistoryPage{Facts: []intent.HistoryFact{{Cursor: 1, Kind: intent.HistoryIntentInitialized, Intent: &intent.Revision{ID: "intent_one", Content: intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}}}}}}
+	handler := newHandler(t, service)
+	request := httptest.NewRequest(http.MethodGet, "/v1/history?limit=2", nil)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	if service.historyQuery.Limit != 2 {
+		t.Fatalf("history query = %#v", service.historyQuery)
+	}
+}
+
+func TestHistoryCursorIsBoundToOneLedgerStream(t *testing.T) {
+	firstService := &staticService{historyPage: intent.HistoryPage{Facts: []intent.HistoryFact{{Cursor: 1, Kind: intent.HistoryIntentInitialized, Intent: &intent.Revision{ID: "intent_one", Content: intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}}}}}}
+	firstServer := httptest.NewServer(newHandler(t, firstService))
+	defer firstServer.Close()
+	first, err := (controlhttp.Client{Server: firstServer.URL}).History(context.Background(), "", 10)
+	if err != nil || len(first.Facts) != 1 {
+		t.Fatalf("read first history = %#v, %v", first, err)
+	}
+
+	secondService := &staticService{historyPage: intent.HistoryPage{Facts: []intent.HistoryFact{{Cursor: 1, Kind: intent.HistoryIntentInitialized, Intent: &intent.Revision{ID: "intent_other", Content: intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"}}}}}}
+	secondServer := httptest.NewServer(newHandler(t, secondService))
+	defer secondServer.Close()
+	if _, err := (controlhttp.Client{Server: secondServer.URL}).History(context.Background(), first.Facts[0].Cursor, 10); err == nil {
+		t.Fatal("foreign ledger cursor resumed a different history stream")
+	}
+}
+
+func TestClientRejectsMalformedHistoryFactPayload(t *testing.T) {
+	malformed := intent.Version{ID: "version_one", ChangeID: "change_one", BaseIntent: "intent_one", Producer: "local:ion"}
+	service := &staticService{historyPage: intent.HistoryPage{Facts: []intent.HistoryFact{
+		{Cursor: 1, Kind: intent.HistoryIntentInitialized, Intent: &intent.Revision{ID: "intent_one", Content: intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}}},
+		{Cursor: 2, Kind: intent.HistoryVersionProposed, Change: &intent.Change{ID: "change_one"}, Version: &malformed},
+	}}}
+	server := httptest.NewServer(newHandler(t, service))
+	defer server.Close()
+	if _, err := (controlhttp.Client{Server: server.URL}).History(context.Background(), "", 10); err == nil {
+		t.Fatal("client accepted a proposed Version without content")
+	}
+}
+
+func TestClientReadsAndResumesHistory(t *testing.T) {
+	service := &staticService{
+		historyPage: intent.HistoryPage{
+			Facts: []intent.HistoryFact{{
+				Cursor: 1,
+				Kind:   intent.HistoryIntentInitialized,
+				Intent: &intent.Revision{ID: "intent_one", Content: intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}},
+			}},
+		},
+	}
+	server := httptest.NewServer(newHandler(t, service))
+	defer server.Close()
+	client := controlhttp.Client{Server: server.URL}
+
+	page, err := client.History(context.Background(), "", 10)
+	if err != nil {
+		t.Fatalf("read history: %v", err)
+	}
+	if len(page.Facts) != 1 || page.Facts[0].Cursor == "" || page.Facts[0].Intent == nil || page.Facts[0].Intent.ID != "intent_one" {
+		t.Fatalf("history page = %#v", page)
+	}
+	if _, err := client.History(context.Background(), page.Facts[0].Cursor, 10); err != nil {
+		t.Fatalf("resume history: %v", err)
+	}
+}
+
+func TestChangeInspectionAndHeldRebaseUseImmutableFacts(t *testing.T) {
+	service := &staticService{
+		changeInspection: intent.ChangeInspection{
+			Change:        intent.Change{ID: "change_one"},
+			LatestVersion: intent.Version{ID: "version_one", ChangeID: "change_one", BaseIntent: "intent_one", Content: intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}, Producer: "local:ion"},
+		},
+	}
+	handler := newHandler(t, service)
+	inspectRequest := httptest.NewRequest(http.MethodGet, "/v1/changes/change_one", nil)
+	inspectRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(inspectRecorder, inspectRequest)
+	if inspectRecorder.Code != http.StatusOK {
+		t.Fatalf("inspect status = %d, want 200: %s", inspectRecorder.Code, inspectRecorder.Body.String())
+	}
+
+	body := bytes.NewBufferString(`{"schema":"grd.held-version-rebase/v1","expectedVersion":"version_one","expectedIntent":"intent_two","content":{"engine":"git","revision":"bbbbbbbb"},"rationale":"Replay onto current Intent."}`)
+	rebaseRequest := httptest.NewRequest(http.MethodPost, "/v1/held-version-rebases", body)
+	rebaseRequest.Header.Set("Content-Type", "application/json")
+	rebaseRequest.Header.Set("Idempotency-Key", "rebase-one")
+	rebaseRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(rebaseRecorder, rebaseRequest)
+	if rebaseRecorder.Code != http.StatusOK {
+		t.Fatalf("rebase status = %d, want 200: %s", rebaseRecorder.Code, rebaseRecorder.Body.String())
+	}
+	if service.heldRebaseRequest.Producer != "local:ion" {
+		t.Fatalf("held rebase producer = %q, want configured principal", service.heldRebaseRequest.Producer)
+	}
+}
+
+func TestClientInspectsChangeAndRecordsExactHeldRebase(t *testing.T) {
+	service := &staticService{
+		changeInspection: intent.ChangeInspection{
+			Change:        intent.Change{ID: "change_one"},
+			LatestVersion: intent.Version{ID: "version_one", ChangeID: "change_one", BaseIntent: "intent_one", Content: intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}, Producer: "local:ion"},
+		},
+	}
+	server := httptest.NewServer(newHandler(t, service))
+	defer server.Close()
+	client := controlhttp.Client{Server: server.URL}
+
+	change, err := client.Change(context.Background(), "change_one")
+	if err != nil || change.LatestVersion.ID != "version_one" {
+		t.Fatalf("Change = %#v, error = %v", change, err)
+	}
+	request := controlhttp.HeldVersionRebaseRequest{Schema: controlhttp.HeldVersionRebaseSchema, ExpectedVersion: "version_one", ExpectedIntent: "intent_two", Content: controlhttp.Content{Engine: "git", Revision: "bbbbbbbb"}, Rationale: "Replay onto current Intent."}
+	receipt, err := client.RebaseHeldVersion(context.Background(), "rebase-one", request)
+	if err != nil {
+		t.Fatalf("rebase held Version: %v", err)
+	}
+	if receipt.Rebase.FromVersion != request.ExpectedVersion || receipt.Rebase.ToIntent != request.ExpectedIntent || receipt.Version.Content != request.Content {
+		t.Fatalf("held rebase receipt = %#v", receipt)
+	}
+}
+
 func TestClientRejectsAnUnknownIntentSchema(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -435,18 +636,25 @@ func newHandler(t *testing.T, service *staticService) http.Handler {
 }
 
 type staticService struct {
-	accepted        intent.Revision
-	proposed        intent.Proposed
-	proposeErr      error
-	repository      string
-	proposal        intentservice.Proposal
-	version         intent.Version
-	versionFound    bool
-	evaluation      intent.Evaluation
-	evaluationFound bool
-	requirements    []intent.Requirement
-	promoted        intent.Promoted
-	promotionFound  bool
+	accepted                   intent.Revision
+	proposed                   intent.Proposed
+	proposeErr                 error
+	repository                 string
+	proposal                   intentservice.Proposal
+	version                    intent.Version
+	versionFound               bool
+	evaluation                 intent.Evaluation
+	evaluationFound            bool
+	requirements               []intent.Requirement
+	promoted                   intent.Promoted
+	promotionFound             bool
+	pendingRequirementQuery    intent.PendingRequirementQuery
+	requirementResponseRequest intent.RequirementResponseRequest
+	pendingRequirementPage     intent.PendingRequirementPage
+	historyQuery               intent.HistoryQuery
+	historyPage                intent.HistoryPage
+	changeInspection           intent.ChangeInspection
+	heldRebaseRequest          intentservice.HeldVersionRebaseRequest
 }
 
 func (service *staticService) CurrentIntent(context.Context, string) (intent.Revision, error) {
@@ -471,8 +679,71 @@ func (service *staticService) Requirements(context.Context, string, intent.Versi
 	return service.requirements, nil
 }
 
+func (service *staticService) PendingRequirements(_ context.Context, _ string, query intent.PendingRequirementQuery) (intent.PendingRequirementPage, error) {
+	service.pendingRequirementQuery = query
+	return service.pendingRequirementPage, nil
+}
+
+func (service *staticService) RecordRequirementResponse(_ context.Context, _ string, request intent.RequirementResponseRequest) (intent.RequirementResponse, error) {
+	service.requirementResponseRequest = request
+	return intent.RequirementResponse{
+		ID:        "requirement_response_one",
+		VersionID: request.VersionID,
+		Policy:    request.Policy,
+		Assignee:  request.Assignee,
+		Decision:  request.Decision,
+		Rationale: request.Rationale,
+	}, nil
+}
+
 func (service *staticService) Promotion(context.Context, string, intent.VersionID) (intent.Promoted, bool, error) {
 	return service.promoted, service.promotionFound, nil
+}
+
+func (service *staticService) History(_ context.Context, _ string, query intent.HistoryQuery) (intent.HistoryPage, error) {
+	service.historyQuery = query
+	start := 0
+	for index, fact := range service.historyPage.Facts {
+		if fact.Cursor == query.After {
+			start = index + 1
+			break
+		}
+	}
+	end := min(start+query.Limit, len(service.historyPage.Facts))
+	page := intent.HistoryPage{Facts: intent.CloneHistoryFacts(service.historyPage.Facts[start:end])}
+	if end < len(service.historyPage.Facts) && len(page.Facts) > 0 {
+		page.NextCursor = page.Facts[len(page.Facts)-1].Cursor
+	}
+	return page, nil
+}
+
+func (service *staticService) InspectChange(context.Context, string, intent.ChangeID) (intent.ChangeInspection, error) {
+	return service.changeInspection, nil
+}
+
+func (*staticService) Amend(context.Context, string, intentservice.AmendmentRequest) (intent.Amended, error) {
+	return intent.Amended{}, nil
+}
+
+func (service *staticService) RebaseHeldVersion(_ context.Context, _ string, request intentservice.HeldVersionRebaseRequest) (intent.RebasedHeldVersion, error) {
+	service.heldRebaseRequest = request
+	return intent.RebasedHeldVersion{
+		Change:  intent.Change{ID: "change_one"},
+		Version: intent.Version{ID: "version_two", ChangeID: "change_one", BaseIntent: "intent_two", Content: request.Content, Producer: request.Producer},
+		Rebase:  intent.HeldVersionRebase{FromVersion: request.ExpectedVersion, ToVersion: "version_two", FromIntent: "intent_one", ToIntent: request.ExpectedIntent, Rationale: request.Rationale},
+	}, nil
+}
+
+func (*staticService) ReconcileDependent(context.Context, string, intentservice.DependentReconciliationRequest) (intent.ReconciledDependent, error) {
+	return intent.ReconciledDependent{}, nil
+}
+
+func (*staticService) RecordReconciliationConflict(context.Context, string, intentservice.ReconciliationConflictRequest) (intent.ReconciliationConflictInspection, error) {
+	return intent.ReconciliationConflictInspection{}, nil
+}
+
+func (*staticService) ResolveReconciliationConflict(context.Context, string, intentservice.ReconciliationResolutionRequest) (intent.ResolvedReconciliationConflict, error) {
+	return intent.ResolvedReconciliationConflict{}, nil
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

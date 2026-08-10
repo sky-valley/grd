@@ -260,6 +260,7 @@ func (ledger *transientLedger) RecordRequirementResponse(_ context.Context, key 
 	ledger.requirementResponses[response.VersionID] = append(ledger.requirementResponses[response.VersionID], response)
 	ledger.requirementResponseByID[response.ID] = response
 	ledger.idempotency[key] = transientIdempotencyRecord{operation: transientRequirementResponseOperation, requirementID: response.ID}
+	appendHistoryFact(&ledger.history, HistoryFact{Kind: HistoryRequirementResponded, RequirementResponse: &response})
 	return nil
 }
 

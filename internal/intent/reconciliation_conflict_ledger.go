@@ -84,6 +84,7 @@ func (ledger *transientLedger) RecordReconciliationConflict(_ context.Context, k
 		versionID:  conflict.Version.ID,
 		conflictID: conflict.ID,
 	}
+	appendHistoryFact(&ledger.history, HistoryFact{Kind: HistoryConflictRecorded, ReconciliationConflict: &conflict})
 	return nil
 }
 

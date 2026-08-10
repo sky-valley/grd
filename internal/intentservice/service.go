@@ -35,6 +35,7 @@ type Repository interface {
 	ReconciliationConflicts(ctx context.Context, query intent.ReconciliationConflictQuery) (intent.ReconciliationConflictPage, error)
 	InspectChange(ctx context.Context, id intent.ChangeID) (intent.ChangeInspection, error)
 	Versions(ctx context.Context, query intent.VersionQuery) (intent.VersionPage, error)
+	History(ctx context.Context, query intent.HistoryQuery) (intent.HistoryPage, error)
 }
 
 type Repositories interface {
@@ -114,6 +115,14 @@ func (service *Service) CurrentIntent(ctx context.Context, repoID string) (inten
 		return intent.Revision{}, err
 	}
 	return repository.CurrentIntent(), nil
+}
+
+func (service *Service) History(ctx context.Context, repoID string, query intent.HistoryQuery) (intent.HistoryPage, error) {
+	repository, err := service.resolve(ctx, repoID)
+	if err != nil {
+		return intent.HistoryPage{}, err
+	}
+	return repository.History(ctx, query)
 }
 
 func (service *Service) Version(ctx context.Context, repoID string, versionID intent.VersionID) (intent.Version, bool, error) {

@@ -1,10 +1,10 @@
-# Local HTTP inspection
+# Local control protocol
 
 `grds --listen <address> --producer <subject>` exposes one repository over
 HTTP. The address must be a numeric loopback address and port. This first
 adapter has no authentication and must not be exposed as a network service.
-The server-configured producer is recorded on every admitted Version; clients
-cannot claim a different producer.
+The server-configured principal is recorded as producer, assignee, reporter, or
+resolver on writes as appropriate; clients cannot claim a different identity.
 
 ## Accepted Intent
 
@@ -68,3 +68,82 @@ The `grd.version/v1` response always contains the immutable Version. It adds an
 Evaluation, its Requirements and latest Responses, and Promotion when those
 durable facts exist. It deliberately contains no mutable state field. `grd version
 --server <url> --id <version>` validates and prints the same response.
+
+## Requirement inbox and Responses
+
+```http
+GET /v1/requirements?cursor=<opaque>&limit=50
+POST /v1/requirement-responses
+Content-Type: application/json
+Idempotency-Key: response-1
+```
+
+`grd.requirements/v1` pages unresolved Requirements assigned to the
+server-configured principal. The cursor is opaque and bound to the exact
+Version and policy. A Response body uses `grd.requirement-response/v1` and
+identifies its Version, policy, `satisfied` or `revision_requested` decision,
+and rationale. Identity is not accepted from the body: the server records its
+configured principal as assignee.
+
+```json
+{"schema":"grd.requirement-response/v1","version":"version_one","policy":"architecture","decision":"satisfied","rationale":"The migration rehearsal passed."}
+```
+
+The receipt schema is `grd.requirement-response-receipt/v1`. Retry semantics
+match proposals: the same idempotency key and logical Response returns the same
+receipt; conflicting reuse returns `409 Conflict`.
+
+## Durable history
+
+```http
+GET /v1/history?cursor=<opaque>&limit=50
+```
+
+`grd.history/v1` is the cursorable semantic history derived from the durable
+ledger. Each fact has an opaque monotonic cursor and one kind-specific payload.
+Kinds currently include Intent initialization, Version proposal, Evaluation,
+Requirement Response, Promotion, Amendment, dependent reconciliation, held
+Version rebase, conflict, and conflict resolution. Journal implementation
+records are not exposed.
+
+`grd history` prints one page. `grd watch` repeatedly resumes from the last
+cursor and writes one `grd.history-fact/v1` envelope per JSON line; every line
+contains repository identity and one fact, so stored or combined streams remain
+self-describing. It is a polling projection of durable history, not an
+ephemeral event bus, so a client can stop and resume without losing
+authoritative facts. Cursors are bound to the ledger's initial Intent and
+cannot be replayed against a replacement repository stream.
+
+## Change and reconciliation
+
+```http
+GET  /v1/changes/{change}
+POST /v1/amendments
+POST /v1/held-version-rebases
+POST /v1/dependent-reconciliations
+POST /v1/reconciliation-conflicts
+POST /v1/reconciliation-resolutions
+```
+
+Every write requires `application/json`, the matching versioned schema, and an
+`Idempotency-Key`. Producers, reporters, and resolvers are supplied by the
+server configuration. Receipts preserve the old and replacement Version IDs,
+governing Intent, and rationale rather than mutating earlier facts.
+
+The low-level CLI commands are `change`, `amend`, `rebase-held`,
+`reconcile-dependent`, `record-conflict`, and `resolve-conflict`. Mutations
+accept their JSON body through `--input -` or a bounded file.
+
+## Git workspace projection
+
+`submit`, `status`, and `sync` are local Git adapter commands built on the
+control protocol; they are not additional HTTP resources. `submit` proposes
+the exact clean `HEAD`. `status` combines Git ancestry with durable history.
+`sync` constructs a held Version's rebased content in a detached temporary
+worktree, records the replacement through `/v1/held-version-rebases`, and only
+then projects the clean contributor workspace. A retry can finish that local
+projection when a prior control response was lost.
+
+This milestone assumes the commit objects are already present in the Git
+repository hosted by `grds`. It does not yet provide Git object publication,
+remote authentication, or a non-loopback server contract.

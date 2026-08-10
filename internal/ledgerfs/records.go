@@ -46,6 +46,8 @@ type journalState struct {
 	conflicts               map[intent.ConflictID]intent.ReconciliationConflict
 	conflictIDs             []intent.ConflictID
 	resolutions             map[intent.ConflictID]intent.ReconciliationResolution
+	history                 []intent.HistoryFact
+	journalCursor           intent.HistoryCursor
 	idempotency             map[string]idempotencyRecord
 }
 
@@ -413,11 +415,13 @@ func newJournalState() journalState {
 }
 
 func applyValidatedRecord(state *journalState, record journalRecord) {
+	state.journalCursor++
 	switch record.Kind {
 	case repositoryInitialized:
 		if state.current.ID == "" {
 			state.current = *record.Initial
 			state.revisions[record.Initial.ID] = *record.Initial
+			appendJournalHistory(state, intent.HistoryFact{Kind: intent.HistoryIntentInitialized, Intent: record.Initial})
 		}
 	case proposalRecorded:
 		if _, exists := state.idempotency[record.IdempotencyKey]; !exists {
@@ -429,6 +433,7 @@ func applyValidatedRecord(state *journalState, record journalRecord) {
 			}
 			state.idempotency[record.IdempotencyKey] = idempotencyRecord{operation: proposalOperation, versionID: record.Version.ID}
 			beginPendingEvaluation(state, record.Version.ID, "")
+			appendJournalHistory(state, intent.HistoryFact{Kind: intent.HistoryVersionProposed, Change: record.Change, Version: record.Version})
 		}
 	case amendmentRecorded:
 		if _, exists := state.idempotency[record.IdempotencyKey]; !exists {
@@ -440,6 +445,7 @@ func applyValidatedRecord(state *journalState, record journalRecord) {
 			state.amendments[record.Version.ID] = *record.Amendment
 			state.idempotency[record.IdempotencyKey] = idempotencyRecord{operation: amendmentOperation, versionID: record.Version.ID}
 			beginPendingEvaluation(state, record.Version.ID, record.Amendment.FromVersion)
+			appendJournalHistory(state, intent.HistoryFact{Kind: intent.HistoryVersionAmended, Version: record.Version, Amendment: record.Amendment})
 		}
 	case dependentReconciliationRecorded:
 		applyDependentReconciliation(state, record)
@@ -466,6 +472,7 @@ func applyValidatedRecord(state *journalState, record journalRecord) {
 			delete(state.pendingEvaluations, prepared.Promotion.VersionID)
 			delete(state.prepared, prepared.Promotion.ID)
 			state.pending = ""
+			appendJournalHistory(state, intent.HistoryFact{Kind: intent.HistoryVersionPromoted, Intent: &prepared.Intent, Promotion: &prepared.Promotion})
 		}
 	case reconciliationConflictRecorded:
 		if _, exists := state.idempotency[record.IdempotencyKey]; !exists {
@@ -477,12 +484,14 @@ func applyValidatedRecord(state *journalState, record journalRecord) {
 				versionID:  conflict.Version.ID,
 				conflictID: conflict.ID,
 			}
+			appendJournalHistory(state, intent.HistoryFact{Kind: intent.HistoryConflictRecorded, ReconciliationConflict: &conflict})
 		}
 	case reconciliationResolutionRecorded:
 		applyReconciliationResolution(state, record)
 	case evaluationRecorded:
 		if _, exists := state.evaluations[record.Evaluation.VersionID]; !exists {
 			state.evaluations[record.Evaluation.VersionID] = cloneEvaluation(*record.Evaluation)
+			appendJournalHistory(state, intent.HistoryFact{Kind: intent.HistoryEvaluationRecorded, Evaluation: record.Evaluation})
 		}
 	case requirementResponseRecorded:
 		if _, exists := state.idempotency[record.IdempotencyKey]; !exists {
@@ -490,8 +499,14 @@ func applyValidatedRecord(state *journalState, record journalRecord) {
 			state.requirementResponses[response.VersionID] = append(state.requirementResponses[response.VersionID], response)
 			state.requirementResponseByID[response.ID] = response
 			state.idempotency[record.IdempotencyKey] = idempotencyRecord{operation: requirementResponseOperation, requirementID: response.ID}
+			appendJournalHistory(state, intent.HistoryFact{Kind: intent.HistoryRequirementResponded, RequirementResponse: record.RequirementResponse})
 		}
 	}
+}
+
+func appendJournalHistory(state *journalState, fact intent.HistoryFact) {
+	fact.Cursor = state.journalCursor
+	state.history = append(state.history, intent.CloneHistoryFacts([]intent.HistoryFact{fact})[0])
 }
 
 func beginPendingEvaluation(state *journalState, versionID, superseded intent.VersionID) {

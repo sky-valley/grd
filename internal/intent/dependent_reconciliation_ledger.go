@@ -83,6 +83,7 @@ func (ledger *transientLedger) RecordDependentReconciliation(_ context.Context, 
 		versionID: version.ID,
 	}
 	ledger.beginPendingEvaluation(version.ID, reconciliation.FromVersion)
+	appendHistoryFact(&ledger.history, HistoryFact{Kind: HistoryDependentReconciled, Version: &version, DependentReconciliation: &reconciliation})
 	return nil
 }
 

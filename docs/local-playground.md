@@ -1,8 +1,8 @@
 # Local playground
 
-This walkthrough runs one `grds` server and uses the `grd` client to propose,
-evaluate, inspect, and promote a real Git commit. It requires Go and Git. `jq`
-is used only to make shell extraction readable.
+This walkthrough runs one `grds` server and uses the `grd` client to submit,
+evaluate, inspect, and promote real Git commits. It requires Go and Git. `jq`
+is used only to make shell extraction readable in the manual walkthrough.
 
 The included evaluator clears every policy. It proves the GRD plumbing; it is
 not a semantic review and must not be used for real acceptance decisions.
@@ -53,7 +53,7 @@ remain available:
   --trunk refs/heads/main \
   --evaluator "$PWD/examples/evaluator-always-clear.sh" \
   --listen 127.0.0.1:8787 \
-  --producer local:player \
+  --producer principal:playground \
   --poll-interval 100ms \
   > "$STATE/ready.json" 2> "$STATE/grds.log" &
 GRDS_PID=$!
@@ -107,9 +107,32 @@ proposal, one or both may be absent; repeat `grd version` to observe them.
 After Promotion, accepted Intent and `refs/heads/main` identify the candidate
 commit even though the working tree remains on `experiment`.
 
-To see a held Version, copy the evaluator and change `requiresAction` to
-`true`. The resulting Requirement appears in `grd version`; this milestone does
-not yet expose the Response command needed to resolve it.
+`grd submit --server "$SERVER" --workdir "$PLAY"` is the Git-native form of
+the proposal above: it requires a clean committed workspace, derives accepted
+Intent, and supplies a deterministic retry key. `grd status` derives whether
+the current commit is accepted, proposed, reconciled, unsubmitted, behind, or
+diverged.
+
+To exercise a held Version, start `grds` with
+`examples/evaluator-requires-response.sh`. Its one policy is assigned to the
+same canonical principal as `--producer`, so the local principal can list and
+answer it:
+
+```sh
+grd requirements --server "$SERVER"
+grd respond --server "$SERVER" \
+  --idempotency-key response-1 \
+  --version "$VERSION" \
+  --policy simplicity \
+  --decision satisfied \
+  --rationale 'The evidence is sufficient.'
+grd history --server "$SERVER"
+grd watch --server "$SERVER" --after <cursor>
+```
+
+Responses do not rewrite Evaluation. A satisfied Response lets the durable
+runner resume the same Version and attempt Promotion. `revision_requested`
+keeps the Requirement unresolved until a replacement Version is recorded.
 
 ## Automated smoke rehearsal
 
@@ -121,6 +144,18 @@ The repository also carries the same journey as a disposable smoke test:
 
 It prints five JSONL facts: readiness, initial Intent, proposal receipt,
 Version inspection, and final Intent.
+
+The fuller rehearsal stages two concurrent Changes from the same accepted
+commit under one configured local principal; it is not an authentication or
+multi-user identity demonstration. Both are held; one responds and promotes;
+the other then uses `grd sync` to rebase onto current Intent and record a
+replacement Version before responding and promoting. The script verifies that
+trunk contains both contributions and that the complete lineage is visible
+through `history` and `watch`:
+
+```sh
+./scripts/smoke-adaptive-loop.sh
+```
 
 Stop the manual server when finished:
 

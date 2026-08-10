@@ -59,6 +59,7 @@ func (ledger *transientLedger) RecordHeldVersionRebase(_ context.Context, key st
 		versionID: version.ID,
 	}
 	ledger.beginPendingEvaluation(version.ID, rebase.FromVersion)
+	appendHistoryFact(&ledger.history, HistoryFact{Kind: HistoryHeldVersionRebased, Version: &version, HeldVersionRebase: &rebase})
 	return nil
 }
 

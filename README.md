@@ -50,25 +50,40 @@ variables only when named explicitly; the evaluator adapter also supplies
 `PATH` when it was not named.
 
 `internal/controlhttp` is the first transport adapter. When explicitly enabled,
-`grds` exposes accepted Intent, idempotent proposal admission, and exact-Version
-inspection over a loopback-only HTTP endpoint. The `grd` client validates each
-versioned fact or receipt and writes one JSON object to stdout. The contract is
-documented in
+`grds` exposes accepted Intent, idempotent proposal and reconciliation writes,
+Requirement inbox and Response operations, exact-Version and Change inspection,
+and cursorable durable history over a loopback-only HTTP endpoint. The `grd`
+client validates each versioned fact or receipt and writes JSON to stdout. The
+contract is documented in
 [`docs/control-http.md`](docs/control-http.md).
+
+`internal/gitworkspace` is the first contributor-side VCS adapter. `grd submit`
+turns a clean committed Git workspace into a Version, `grd status` derives its
+relationship to accepted Intent from Git and durable facts, and `grd sync`
+rebases stale held work onto current Intent while recording the replacement
+Version and reconciliation rationale.
 
 VCS engines own content representation. Evaluators interpret repository
 guidance. GRD owns the durable decision history between them.
 
 ## Status
 
-This is a locally operable single-repository milestone, not yet a networked
-distribution. A client can inspect accepted Intent, propose an exact Version,
-and inspect its Evaluation, Requirements, latest Responses, and Promotion. It has no
-list, watch, authentication, or Requirement Response interface yet. Its
-HTTP endpoint is deliberately restricted to loopback and has no authentication.
-It does not include hosted control-store adapters, model providers, deployment
-configuration, or rehearsal tooling. Packages remain under `internal/` until
-their public API has earned a stable shape.
+This is a locally operable single-repository milestone with multiple concurrent
+Changes under one configured local principal, not yet a networked distribution.
+A local actor can submit a clean Git commit, inspect accepted Intent or a
+Version, read assigned Requirements, record an idempotent Response, watch
+durable history, and reconcile a stale held branch onto newly accepted Intent.
+Low-level commands also expose amendment, dependency, and conflict facts.
+
+The HTTP endpoint is deliberately restricted to loopback and has no
+authentication. Commit objects must already exist in the server's Git object
+database; GRD does not yet publish them over a Git remote. It also lacks shared
+or hosted persistence, network identity and authorization, model-provider
+adapters, deployment configuration, persistent divergence, and a polished
+human interface. `grd sync` covers the common one-step held-Version and accepted
+Amendment paths; more complex reconciliation remains explicit through the
+lower-level commands. Packages remain under `internal/` until their public API
+has earned a stable shape.
 
 The filesystem ledger is single-host, single-process storage. It replays its
 history into memory at open and is not a substitute for shared or distributed
@@ -98,14 +113,15 @@ go run ./cmd/grds \
   --trunk refs/heads/main \
   --evaluator /path/to/evaluator \
   --listen 127.0.0.1:0 \
-  --producer local:player
+  --producer principal:player
 ```
 
 Use repeatable `--evaluator-env NAME` flags to forward named environment
 variables in addition to the evaluator's default `PATH`. `--listen` is
 optional and accepts only a numeric loopback address and port; port `0` asks
 the operating system to choose a free port. Enabling it also requires an opaque
-canonical `--producer` principal for proposal provenance. On successful
+canonical `--producer` principal for local write provenance and Requirement
+authority. On successful
 startup, `grds`
 writes one `grd.host-ready/v1` JSON object to stdout; when local HTTP is enabled,
 its `control` field contains the chosen server URL. Runtime diagnostics go to
@@ -119,5 +135,11 @@ Inspect accepted Intent using the advertised URL:
 go run ./cmd/grd intent --server http://127.0.0.1:12345
 ```
 
-For a complete disposable setup and a real propose/evaluate/promote cycle, use
-the [local playground](docs/local-playground.md).
+For disposable real-Git rehearsals, use the
+[local playground](docs/local-playground.md). The adaptive rehearsal runs two
+concurrent branches under that principal through Requirements, Responses,
+Promotion, and recorded reconciliation:
+
+```sh
+./scripts/smoke-adaptive-loop.sh
+```

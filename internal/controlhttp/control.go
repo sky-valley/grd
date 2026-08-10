@@ -34,7 +34,27 @@ func NewHandler(config Config, service Service) (http.Handler, error) {
 			serveIntent(w, r, config.Repository, service)
 		case "/v1/proposals":
 			serveProposal(w, r, config, service)
+		case "/v1/requirements":
+			serveRequirements(w, r, config, service)
+		case "/v1/requirement-responses":
+			serveRequirementResponse(w, r, config, service)
+		case "/v1/history":
+			serveHistory(w, r, config.Repository, service)
+		case "/v1/amendments":
+			serveAmendment(w, r, config, service)
+		case "/v1/held-version-rebases":
+			serveHeldVersionRebase(w, r, config, service)
+		case "/v1/dependent-reconciliations":
+			serveDependentReconciliation(w, r, config, service)
+		case "/v1/reconciliation-conflicts":
+			serveReconciliationConflict(w, r, config, service)
+		case "/v1/reconciliation-resolutions":
+			serveReconciliationResolution(w, r, config, service)
 		default:
+			if changeID, found := strings.CutPrefix(r.URL.Path, "/v1/changes/"); found && changeID != "" && !strings.Contains(changeID, "/") {
+				serveChange(w, r, config.Repository, intent.ChangeID(changeID), service)
+				return
+			}
 			if versionID, found := strings.CutPrefix(r.URL.Path, "/v1/versions/"); found && versionID != "" && !strings.Contains(versionID, "/") {
 				serveVersion(w, r, config.Repository, intent.VersionID(versionID), service)
 				return
@@ -135,13 +155,14 @@ func mapEvaluation(evaluation intent.Evaluation) EvaluationFact {
 			},
 		}
 	}
-	return EvaluationFact{GoverningIntent: string(evaluation.GoverningIntent), Policies: policies}
+	return EvaluationFact{Version: string(evaluation.VersionID), GoverningIntent: string(evaluation.GoverningIntent), Policies: policies}
 }
 
 func mapRequirements(requirements []intent.Requirement) []RequirementFact {
 	mapped := make([]RequirementFact, len(requirements))
 	for index, requirement := range requirements {
 		mapped[index] = RequirementFact{
+			Version:  string(requirement.VersionID),
 			Policy:   requirement.Policy,
 			Assignee: requirement.Assignee,
 			Reason:   requirement.Reason,
@@ -150,6 +171,8 @@ func mapRequirements(requirements []intent.Requirement) []RequirementFact {
 		if requirement.LatestResponse != nil {
 			mapped[index].LatestResponse = &RequirementResponseFact{
 				ID:        string(requirement.LatestResponse.ID),
+				Version:   string(requirement.LatestResponse.VersionID),
+				Policy:    requirement.LatestResponse.Policy,
 				Assignee:  requirement.LatestResponse.Assignee,
 				Decision:  string(requirement.LatestResponse.Decision),
 				Rationale: requirement.LatestResponse.Rationale,

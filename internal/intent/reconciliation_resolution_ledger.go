@@ -64,6 +64,7 @@ func (ledger *transientLedger) RecordReconciliationResolution(_ context.Context,
 		conflictID: resolution.ConflictID,
 	}
 	ledger.beginPendingEvaluation(version.ID, resolution.FromVersion)
+	appendHistoryFact(&ledger.history, HistoryFact{Kind: HistoryReconciliationResolved, Version: &version, ReconciliationResolution: &resolution})
 	return nil
 }
 

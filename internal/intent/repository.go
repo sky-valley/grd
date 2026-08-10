@@ -142,6 +142,7 @@ type Repository struct {
 	rebases              HeldVersionRebaseStore
 	promotions           PromotionJournal
 	conflicts            ReconciliationConflictStore
+	history              HistoryStore
 	conflict             *ProjectionConflict
 }
 
@@ -198,6 +199,7 @@ func OpenRepository(ctx context.Context, initial ContentRef, ledger Ledger, admi
 		rebases:              ledger,
 		promotions:           ledger,
 		conflicts:            ledger,
+		history:              ledger,
 	}
 	if err := repository.Reconcile(ctx); err != nil {
 		var conflict *ProjectionConflict

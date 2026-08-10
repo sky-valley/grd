@@ -81,6 +81,7 @@ func applyHeldVersionRebase(state *journalState, record journalRecord) {
 		versionID: version.ID,
 	}
 	beginPendingEvaluation(state, version.ID, rebase.FromVersion)
+	appendJournalHistory(state, intent.HistoryFact{Kind: intent.HistoryHeldVersionRebased, Version: record.Version, HeldVersionRebase: record.HeldVersionRebase})
 }
 
 func (ledger *Ledger) HeldVersionRebase(ctx context.Context, toVersion intent.VersionID) (intent.HeldVersionRebase, bool, error) {

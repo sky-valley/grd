@@ -77,6 +77,10 @@ type ReconciliationConflictStore interface {
 	RecordReconciliationResolution(ctx context.Context, key string, resolution ReconciliationResolution, version Version) error
 }
 
+type HistoryStore interface {
+	History(ctx context.Context, after HistoryCursor, limit int) ([]HistoryFact, bool, error)
+}
+
 type Ledger interface {
 	IntentStore
 	ChangeStore
@@ -88,6 +92,7 @@ type Ledger interface {
 	HeldVersionRebaseStore
 	PromotionJournal
 	ReconciliationConflictStore
+	HistoryStore
 }
 
 type transientLedger struct {
@@ -115,6 +120,7 @@ type transientLedger struct {
 	conflicts               map[ConflictID]ReconciliationConflict
 	conflictIDs             []ConflictID
 	resolutions             map[ConflictID]ReconciliationResolution
+	history                 []HistoryFact
 	idempotency             map[string]transientIdempotencyRecord
 }
 
@@ -337,6 +343,8 @@ func (ledger *transientLedger) Initialize(_ context.Context, initial Revision) e
 	ledger.conflictIDs = nil
 	ledger.resolutions = make(map[ConflictID]ReconciliationResolution)
 	ledger.idempotency = make(map[string]transientIdempotencyRecord)
+	ledger.history = nil
+	appendHistoryFact(&ledger.history, HistoryFact{Kind: HistoryIntentInitialized, Intent: &initial})
 	return nil
 }
 
@@ -389,6 +397,7 @@ func (ledger *transientLedger) RecordProposal(_ context.Context, key string, cha
 	}
 	ledger.idempotency[key] = transientIdempotencyRecord{operation: transientProposalOperation, versionID: version.ID}
 	ledger.beginPendingEvaluation(version.ID, "")
+	appendHistoryFact(&ledger.history, HistoryFact{Kind: HistoryVersionProposed, Change: &change, Version: &version})
 	return nil
 }
 
@@ -441,6 +450,7 @@ func (ledger *transientLedger) RecordAmendment(_ context.Context, key string, am
 	ledger.amendments[version.ID] = amendment
 	ledger.idempotency[key] = transientIdempotencyRecord{operation: transientAmendmentOperation, versionID: version.ID}
 	ledger.beginPendingEvaluation(version.ID, amendment.FromVersion)
+	appendHistoryFact(&ledger.history, HistoryFact{Kind: HistoryVersionAmended, Version: &version, Amendment: &amendment})
 	return nil
 }
 
@@ -531,5 +541,12 @@ func (ledger *transientLedger) CompletePromotion(_ context.Context, promotionID 
 	delete(ledger.pendingEvaluations, prepared.Promotion.VersionID)
 	delete(ledger.prepared, promotionID)
 	ledger.pending = ""
+	appendHistoryFact(&ledger.history, HistoryFact{Kind: HistoryVersionPromoted, Intent: &prepared.Intent, Promotion: &prepared.Promotion})
 	return nil
+}
+
+func (ledger *transientLedger) History(_ context.Context, after HistoryCursor, limit int) ([]HistoryFact, bool, error) {
+	ledger.mu.RLock()
+	defer ledger.mu.RUnlock()
+	return historyPage(ledger.history, after, limit)
 }

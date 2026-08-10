@@ -7,7 +7,7 @@ stderr.
 ## `grd.host-ready/v1`
 
 ```json
-{"schema":"grd.host-ready/v1","repository":"repo_example","intent":"intent_...","content":{"engine":"git","revision":"0123456789abcdef0123456789abcdef01234567"},"control":"http://127.0.0.1:49152","producer":"local:player"}
+{"schema":"grd.host-ready/v1","repository":"repo_example","intent":"intent_...","content":{"engine":"git","revision":"0123456789abcdef0123456789abcdef01234567"},"control":"http://127.0.0.1:49152","producer":"principal:player"}
 ```
 
 - `repository` is the configured opaque repository ID.
@@ -17,8 +17,9 @@ stderr.
 - `control` is optional. When present, it is the loopback HTTP server created by
   the explicit `--listen` flag.
 - `producer` is present with `control` and identifies the server-configured
-  principal attributed to proposals on that endpoint.
+  principal attributed to writes on that endpoint.
 
 Consumers must reject unknown schema revisions. This is a one-shot readiness
 receipt, not a resumable event feed. Durable repository facts remain in the
-decision ledger; a future list or watch interface must project them from there.
+decision ledger. `grd history` and `grd watch` expose a cursorable projection
+of those facts; see [`control-http.md`](control-http.md#durable-history).

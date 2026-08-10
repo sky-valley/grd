@@ -136,6 +136,32 @@ func (ledger *Ledger) Version(ctx context.Context, id intent.VersionID) (intent.
 	return cloneVersion(version), found, nil
 }
 
+func (ledger *Ledger) History(ctx context.Context, after intent.HistoryCursor, limit int) ([]intent.HistoryFact, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	if ledger.closed {
+		return nil, false, errors.New("journal is closed")
+	}
+	start := 0
+	if after != 0 {
+		start = -1
+		for index, fact := range ledger.state.history {
+			if fact.Cursor == after {
+				start = index + 1
+				break
+			}
+		}
+		if start < 0 {
+			return nil, false, intent.ErrHistoryCursorNotFound
+		}
+	}
+	end := min(start+limit, len(ledger.state.history))
+	return intent.CloneHistoryFacts(ledger.state.history[start:end]), end < len(ledger.state.history), nil
+}
+
 func (ledger *Ledger) Dependents(ctx context.Context, id intent.VersionID) ([]intent.Version, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

@@ -98,6 +98,7 @@ func applyReconciliationResolution(state *journalState, record journalRecord) {
 		conflictID: resolution.ConflictID,
 	}
 	beginPendingEvaluation(state, version.ID, resolution.FromVersion)
+	appendJournalHistory(state, intent.HistoryFact{Kind: intent.HistoryReconciliationResolved, Version: record.Version, ReconciliationResolution: record.ReconciliationResolution})
 }
 
 func (ledger *Ledger) ReconciliationResolution(ctx context.Context, conflictID intent.ConflictID) (intent.ReconciliationResolution, bool, error) {

@@ -167,6 +167,7 @@ func (ledger *transientLedger) RecordEvaluation(_ context.Context, evaluation Ev
 		return err
 	}
 	ledger.evaluations[evaluation.VersionID] = cloneEvaluation(evaluation)
+	appendHistoryFact(&ledger.history, HistoryFact{Kind: HistoryEvaluationRecorded, Evaluation: &evaluation})
 	return nil
 }
 
