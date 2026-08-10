@@ -7,12 +7,16 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/sky-valley/grd/internal/controlhttp"
 	"github.com/sky-valley/grd/internal/evaluatorexec"
 )
 
@@ -23,6 +27,7 @@ type hostReady struct {
 	Repository string      `json:"repository"`
 	Intent     string      `json:"intent"`
 	Content    hostContent `json:"content"`
+	Control    string      `json:"control,omitempty"`
 }
 
 type hostContent struct {
@@ -56,7 +61,7 @@ func run(
 	config.Runner.Report = func(err error) {
 		fmt.Fprintf(stderr, "grds: %v\n", err)
 	}
-	runtime, err := openSingleRepository(ctx, config)
+	runtime, err := openSingleRepository(ctx, config.singleRepositoryConfig)
 	if err != nil {
 		return err
 	}
@@ -67,6 +72,16 @@ func run(
 	if err != nil {
 		return fmt.Errorf("read ready state: %w", err)
 	}
+	var listener net.Listener
+	controlURL := ""
+	if config.ControlListen != "" {
+		listener, err = net.Listen("tcp", config.ControlListen)
+		if err != nil {
+			return fmt.Errorf("listen for local control: %w", err)
+		}
+		defer listener.Close()
+		controlURL = "http://" + listener.Addr().String()
+	}
 	if err := json.NewEncoder(stdout).Encode(hostReady{
 		Schema:     hostReadySchema,
 		Repository: config.RepositoryID,
@@ -75,57 +90,118 @@ func run(
 			Engine:   current.Content.Engine,
 			Revision: current.Content.Revision,
 		},
+		Control: controlURL,
 	}); err != nil {
 		return fmt.Errorf("write readiness receipt: %w", err)
 	}
+	if listener != nil {
+		return runControlServer(ctx, runtime, listener, controlhttp.NewHandler(config.RepositoryID, runtime.Service()))
+	}
 	runtime.Run(ctx)
 	return nil
+}
+
+func runControlServer(ctx context.Context, runtime *singleRepositoryRuntime, listener net.Listener, handler http.Handler) error {
+	workCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	runnerDone := make(chan struct{})
+	go func() {
+		defer close(runnerDone)
+		runtime.Run(workCtx)
+	}()
+
+	server := &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		MaxHeaderBytes:    16 * 1024,
+	}
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- server.Serve(listener)
+	}()
+
+	var runErr error
+	select {
+	case <-ctx.Done():
+	case err := <-serveErr:
+		if !errors.Is(err, http.ErrServerClosed) {
+			runErr = fmt.Errorf("serve local control: %w", err)
+		}
+	}
+	cancel()
+	shutdownCtx, stopShutdown := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stopShutdown()
+	shutdownErr := server.Shutdown(shutdownCtx)
+	<-runnerDone
+	return errors.Join(runErr, shutdownErr)
+}
+
+type commandConfig struct {
+	singleRepositoryConfig
+	ControlListen string
 }
 
 func parseCommandConfig(
 	args []string,
 	diagnostics io.Writer,
 	lookupEnv func(string) (string, bool),
-) (singleRepositoryConfig, error) {
+) (commandConfig, error) {
 	flags := flag.NewFlagSet("grds", flag.ContinueOnError)
 	flags.SetOutput(diagnostics)
-	var config singleRepositoryConfig
+	var config commandConfig
 	var evaluatorEnvironment environmentNames
 	flags.StringVar(&config.RepositoryID, "repository", "", "opaque repository id")
 	flags.StringVar(&config.GitDir, "git-dir", "", "path to the repository Git directory")
 	flags.StringVar(&config.LedgerPath, "ledger", "", "path to the append-only decision ledger")
 	flags.StringVar(&config.TrunkRef, "trunk", "refs/heads/main", "accepted Git branch ref")
+	flags.StringVar(&config.ControlListen, "listen", "", "loopback address for the local control endpoint")
 	flags.StringVar(&config.Evaluator.Executable, "evaluator", "", "external evaluator executable")
 	flags.Var(&evaluatorEnvironment, "evaluator-env", "environment variable name to forward to the evaluator; repeatable")
 	flags.IntVar(&config.Runner.Workers, "workers", 1, "concurrent evaluation workers")
 	flags.DurationVar(&config.Runner.PollInterval, "poll-interval", time.Second, "pending evaluation poll interval")
 	if err := flags.Parse(args); err != nil {
-		return singleRepositoryConfig{}, err
+		return commandConfig{}, err
 	}
 	if flags.NArg() != 0 {
-		return singleRepositoryConfig{}, errors.New("grds does not accept positional arguments")
+		return commandConfig{}, errors.New("grds does not accept positional arguments")
 	}
 	if strings.TrimSpace(config.Evaluator.Executable) == "" {
-		return singleRepositoryConfig{}, errors.New("evaluator executable is required")
+		return commandConfig{}, errors.New("evaluator executable is required")
 	}
 	if config.Runner.Workers < 1 || config.Runner.Workers > 100 {
-		return singleRepositoryConfig{}, errors.New("workers must be between one and 100")
+		return commandConfig{}, errors.New("workers must be between one and 100")
 	}
 	if config.Runner.PollInterval <= 0 {
-		return singleRepositoryConfig{}, errors.New("poll interval must be positive")
+		return commandConfig{}, errors.New("poll interval must be positive")
 	}
-	if err := validateSingleRepositoryConfig(config); err != nil {
-		return singleRepositoryConfig{}, err
+	if err := validateSingleRepositoryConfig(config.singleRepositoryConfig); err != nil {
+		return commandConfig{}, err
+	}
+	if err := validateControlListen(config.ControlListen); err != nil {
+		return commandConfig{}, err
 	}
 	environment, err := evaluatorEnvironment.resolve(lookupEnv)
 	if err != nil {
-		return singleRepositoryConfig{}, err
+		return commandConfig{}, err
 	}
 	config.Evaluator = evaluatorexec.Config{
 		Executable:  config.Evaluator.Executable,
 		Environment: environment,
 	}
 	return config, nil
+}
+
+func validateControlListen(address string) error {
+	if address == "" {
+		return nil
+	}
+	parsed, err := netip.ParseAddrPort(address)
+	if err != nil || !parsed.Addr().IsLoopback() {
+		return errors.New("listen address must be a numeric loopback address and port")
+	}
+	return nil
 }
 
 type environmentNames []string

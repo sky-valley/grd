@@ -49,16 +49,23 @@ command keeps repository identity opaque and forwards evaluator environment
 variables only when named explicitly; the evaluator adapter also supplies
 `PATH` when it was not named.
 
+`internal/controlhttp` is the first transport adapter. When explicitly enabled,
+`grds` exposes the accepted Intent of its one repository over a loopback-only
+HTTP endpoint. The `grd intent` client validates that versioned fact and writes
+one JSON object to stdout. The contract is documented in
+[`docs/control-http.md`](docs/control-http.md).
+
 VCS engines own content representation. Evaluators interpret repository
 guidance. GRD owns the durable decision history between them.
 
 ## Status
 
-This is a runnable single-repository composition milestone, not yet an
-operable local or networked distribution. It can recover and process pending
-Versions already present in its ledger, but it has no supported proposal,
-list, or watch interface yet. It deliberately does not include the client,
-authentication, hosted control-store adapters, model providers, deployment
+This is a locally inspectable single-repository composition milestone, not yet
+an operable contribution workflow or networked distribution. It can recover
+and process pending Versions already present in its ledger and report accepted
+Intent, but it has no supported proposal, list, or watch interface yet. Its
+HTTP endpoint is deliberately restricted to loopback and has no authentication.
+It does not include hosted control-store adapters, model providers, deployment
 configuration, or rehearsal tooling. Packages remain under `internal/` until
 their public API has earned a stable shape.
 
@@ -88,12 +95,22 @@ go run ./cmd/grds \
   --git-dir /path/to/repository/.git \
   --ledger /path/to/grd/decision-loop.jsonl \
   --trunk refs/heads/main \
-  --evaluator /path/to/evaluator
+  --evaluator /path/to/evaluator \
+  --listen 127.0.0.1:0
 ```
 
 Use repeatable `--evaluator-env NAME` flags to forward named environment
-variables in addition to the evaluator's default `PATH`. On successful
-startup, `grds` writes one `grd.host-ready/v1` JSON object to stdout; runtime
-diagnostics go to stderr. SIGINT and SIGTERM stop the evaluator workers and
+variables in addition to the evaluator's default `PATH`. `--listen` is
+optional and accepts only a numeric loopback address and port; port `0` asks
+the operating system to choose a free port. On successful startup, `grds`
+writes one `grd.host-ready/v1` JSON object to stdout; when local HTTP is enabled,
+its `control` field contains the chosen server URL. Runtime diagnostics go to
+stderr. SIGINT and SIGTERM stop the HTTP server and evaluator workers and
 release the ledger lock. The readiness schema is documented in
 [`docs/host-ready.md`](docs/host-ready.md).
+
+Inspect accepted Intent using the advertised URL:
+
+```sh
+go run ./cmd/grd intent --server http://127.0.0.1:12345
+```

@@ -7,10 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/sky-valley/grd/internal/controlhttp"
 	"github.com/sky-valley/grd/internal/evaluatorexec"
 )
 
@@ -56,6 +58,64 @@ func TestRunEmitsReadinessReceiptAndReleasesLedger(t *testing.T) {
 	}
 	if err := reopened.Close(); err != nil {
 		t.Fatalf("close reopened runtime: %v", err)
+	}
+}
+
+func TestRunServesAcceptedIntentAtReadyControlURL(t *testing.T) {
+	gitDir, acceptedOID, _ := stageRuntimeRepository(t)
+	ledgerPath := filepath.Join(t.TempDir(), "state", "decision-loop.jsonl")
+	evaluator := writeClearEvaluator(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stdoutReader, stdoutWriter := io.Pipe()
+	defer stdoutReader.Close()
+	var stderr bytes.Buffer
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- run(ctx, []string{
+			"--repository", "repo_example",
+			"--git-dir", gitDir,
+			"--ledger", ledgerPath,
+			"--trunk", "refs/heads/main",
+			"--evaluator", evaluator,
+			"--listen", "127.0.0.1:0",
+			"--poll-interval", "5ms",
+		}, stdoutWriter, &stderr, os.LookupEnv)
+		_ = stdoutWriter.Close()
+	}()
+
+	var ready hostReady
+	if err := json.NewDecoder(stdoutReader).Decode(&ready); err != nil {
+		t.Fatalf("decode host readiness: %v", err)
+	}
+	if ready.Control == "" {
+		t.Fatal("readiness receipt has no control URL")
+	}
+	response, err := http.Get(ready.Control + "/v1/intent")
+	if err != nil {
+		t.Fatalf("read served Intent: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("Intent status = %d, want 200", response.StatusCode)
+	}
+	var fact controlhttp.IntentFact
+	if err := json.NewDecoder(response.Body).Decode(&fact); err != nil {
+		t.Fatalf("decode served Intent: %v", err)
+	}
+	if fact.Schema != controlhttp.IntentSchema || fact.Repository != "repo_example" || fact.Intent != ready.Intent {
+		t.Fatalf("served Intent = %#v, ready = %#v", fact, ready)
+	}
+	if fact.Content.Engine != "git" || fact.Content.Revision != acceptedOID {
+		t.Fatalf("served content = %#v, want git:%s", fact.Content, acceptedOID)
+	}
+
+	cancel()
+	if err := <-runErr; err != nil {
+		t.Fatalf("run grds: %v", err)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q", stderr.String())
 	}
 }
 
@@ -111,6 +171,9 @@ func TestParseCommandConfigRejectsInconsistentRuntimeBounds(t *testing.T) {
 	spacedGitDir[3] = " /tmp/example.git "
 	if _, err := parseCommandConfig(spacedGitDir, io.Discard, os.LookupEnv); err == nil {
 		t.Fatal("non-canonical Git directory was accepted")
+	}
+	if _, err := parseCommandConfig(append(base, "--listen", "0.0.0.0:8787"), io.Discard, os.LookupEnv); err == nil {
+		t.Fatal("non-loopback control listener was accepted")
 	}
 }
 
