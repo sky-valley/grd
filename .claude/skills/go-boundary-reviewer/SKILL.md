@@ -1,0 +1,1 @@
+../../../.codex/skills/go-boundary-reviewer/SKILL.md

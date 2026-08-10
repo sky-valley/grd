@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review GRD North Star"
+  short_description: "Check GRD changes against its product constitution"
+  default_prompt: "Use $review-grd-north-star to review this change for architectural drift."

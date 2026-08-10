@@ -7,6 +7,9 @@ Versions; the repository evaluates them against accepted guidance, derives
 Requirements when action is needed, records Responses, and promotes only when
 the current evidence permits it.
 
+Read the canonical [product vision](docs/vision.md) before making product or
+architecture decisions.
+
 This public foundation contains the engine-neutral kernel:
 
 - Intent, Change, Version, and promotion identity;
