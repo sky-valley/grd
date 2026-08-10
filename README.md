@@ -28,14 +28,25 @@ across both the durable ledger and the Git projection after restart.
 Opening the adapter persists the private-ref rule in local Git configuration
 and refuses configurations that could override it.
 
+`internal/gitreader` supplies the read side of the Git boundary. It reads
+accepted UTF-8 guidance from exact commits and produces bounded, deterministic
+change evidence without external diff drivers or text conversion.
+
+`internal/evaluatorprotocol` and `internal/evaluatorexec` provide the first
+real evaluator boundary: one versioned JSON request on stdin and one versioned
+JSON result on stdout. Evaluators are ordinary external commands, receive only
+an explicitly configured environment plus `PATH`, and remain independent of
+model or provider choice. The wire contract is documented in
+[`docs/evaluator-protocol.md`](docs/evaluator-protocol.md).
+
 VCS engines own content representation. Evaluators interpret repository
 guidance. GRD owns the durable decision history between them.
 
 ## Status
 
-This is a kernel, local-ledger, and Git-engine snapshot, not yet a runnable
-distribution. It deliberately does not include the client, server, evaluator
-content adapters, hosted control-store adapters, model providers, deployment
+This is a kernel, local-ledger, Git-engine, and evaluator-adapter snapshot, not
+yet a runnable distribution. It deliberately does not include the client,
+server, hosted control-store adapters, model providers, deployment
 configuration, or rehearsal tooling. Packages remain under `internal/` until
 their public API has earned a stable shape.
 
@@ -46,7 +57,8 @@ persistence. File locking is currently supported on operating systems with
 
 ## Development
 
-Requires Go 1.26.5 or newer. Git-engine tests also require `git` on `PATH`.
+Requires Go 1.26.5 or newer. Git-backed tests also require `git` on `PATH`.
+Executable integration tests use a POSIX shell where supported.
 
 ```sh
 go test ./...

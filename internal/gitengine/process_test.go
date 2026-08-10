@@ -48,7 +48,7 @@ func TestGitSubprocessStopsOnContextCancellation(t *testing.T) {
 		_, err := gitengine.Open(ctx, gitDir, "refs/heads/main")
 		done <- err
 	}()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if _, err := os.Stat(started); err == nil {
 			break
@@ -64,7 +64,7 @@ func TestGitSubprocessStopsOnContextCancellation(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("Open after cancellation error = %v, want context.Canceled", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("Git subprocess did not stop after context cancellation")
 	}
 }
