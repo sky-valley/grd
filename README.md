@@ -50,9 +50,10 @@ variables only when named explicitly; the evaluator adapter also supplies
 `PATH` when it was not named.
 
 `internal/controlhttp` is the first transport adapter. When explicitly enabled,
-`grds` exposes the accepted Intent of its one repository over a loopback-only
-HTTP endpoint. The `grd intent` client validates that versioned fact and writes
-one JSON object to stdout. The contract is documented in
+`grds` exposes accepted Intent, idempotent proposal admission, and exact-Version
+inspection over a loopback-only HTTP endpoint. The `grd` client validates each
+versioned fact or receipt and writes one JSON object to stdout. The contract is
+documented in
 [`docs/control-http.md`](docs/control-http.md).
 
 VCS engines own content representation. Evaluators interpret repository
@@ -60,10 +61,10 @@ guidance. GRD owns the durable decision history between them.
 
 ## Status
 
-This is a locally inspectable single-repository composition milestone, not yet
-an operable contribution workflow or networked distribution. It can recover
-and process pending Versions already present in its ledger and report accepted
-Intent, but it has no supported proposal, list, or watch interface yet. Its
+This is a locally operable single-repository milestone, not yet a networked
+distribution. A client can inspect accepted Intent, propose an exact Version,
+and inspect its Evaluation, Requirements, latest Responses, and Promotion. It has no
+list, watch, authentication, or Requirement Response interface yet. Its
 HTTP endpoint is deliberately restricted to loopback and has no authentication.
 It does not include hosted control-store adapters, model providers, deployment
 configuration, or rehearsal tooling. Packages remain under `internal/` until
@@ -96,13 +97,16 @@ go run ./cmd/grds \
   --ledger /path/to/grd/decision-loop.jsonl \
   --trunk refs/heads/main \
   --evaluator /path/to/evaluator \
-  --listen 127.0.0.1:0
+  --listen 127.0.0.1:0 \
+  --producer local:player
 ```
 
 Use repeatable `--evaluator-env NAME` flags to forward named environment
 variables in addition to the evaluator's default `PATH`. `--listen` is
 optional and accepts only a numeric loopback address and port; port `0` asks
-the operating system to choose a free port. On successful startup, `grds`
+the operating system to choose a free port. Enabling it also requires an opaque
+canonical `--producer` principal for proposal provenance. On successful
+startup, `grds`
 writes one `grd.host-ready/v1` JSON object to stdout; when local HTTP is enabled,
 its `control` field contains the chosen server URL. Runtime diagnostics go to
 stderr. SIGINT and SIGTERM stop the HTTP server and evaluator workers and
@@ -114,3 +118,6 @@ Inspect accepted Intent using the advertised URL:
 ```sh
 go run ./cmd/grd intent --server http://127.0.0.1:12345
 ```
+
+For a complete disposable setup and a real propose/evaluate/promote cycle, use
+the [local playground](docs/local-playground.md).

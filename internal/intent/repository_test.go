@@ -66,6 +66,35 @@ func TestRepositoryAdmitsDependentVersionAndRefusesPrematurePromotion(t *testing
 	}
 }
 
+func TestRepositoryReadsAnExactVersionByID(t *testing.T) {
+	ctx := context.Background()
+	initial := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}
+	repository, err := intent.NewEphemeralRepository(initial, &recordingAdmission{}, &recordingProjection{current: initial})
+	if err != nil {
+		t.Fatalf("new repository: %v", err)
+	}
+	proposed, err := repository.Propose(ctx, intent.Proposal{
+		IdempotencyKey: "request-version-read",
+		BaseIntent:     repository.CurrentIntent().ID,
+		Content:        intent.ContentRef{Engine: "git", Revision: "bbbbbbbb"},
+		Producer:       "local:ion",
+	})
+	if err != nil {
+		t.Fatalf("propose: %v", err)
+	}
+
+	got, found, err := repository.Version(ctx, proposed.Version.ID)
+	if err != nil || !found {
+		t.Fatalf("read Version: found %t, error %v", found, err)
+	}
+	if !reflect.DeepEqual(got, proposed.Version) {
+		t.Fatalf("Version = %#v, want %#v", got, proposed.Version)
+	}
+	if _, found, err := repository.Version(ctx, "version_missing"); err != nil || found {
+		t.Fatalf("missing Version: found %t, error %v", found, err)
+	}
+}
+
 func TestRepositoryPromotesDependentAgainstIntentProducedByItsDependency(t *testing.T) {
 	ctx := context.Background()
 	initialContent := intent.ContentRef{Engine: "git", Revision: "aaaaaaaa"}

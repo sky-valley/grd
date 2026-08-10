@@ -122,7 +122,7 @@ func (repository *Repository) PendingRequirements(ctx context.Context, query Pen
 	return page, nil
 }
 
-func (repository *Repository) UnresolvedRequirements(ctx context.Context, versionID VersionID) ([]Requirement, error) {
+func (repository *Repository) Requirements(ctx context.Context, versionID VersionID) ([]Requirement, error) {
 	evaluation, found, err := repository.evaluations.Evaluation(ctx, versionID)
 	if err != nil {
 		return nil, fmt.Errorf("read Version evaluation: %w", err)
@@ -134,10 +134,25 @@ func (repository *Repository) UnresolvedRequirements(ctx context.Context, versio
 	if err != nil {
 		return nil, fmt.Errorf("read Version requirement responses: %w", err)
 	}
-	return cloneRequirements(unresolvedRequirements(evaluation, responses)), nil
+	return cloneRequirements(requirementsWithResponses(evaluation, responses)), nil
 }
 
-func unresolvedRequirements(evaluation Evaluation, responses []RequirementResponse) []Requirement {
+func (repository *Repository) UnresolvedRequirements(ctx context.Context, versionID VersionID) ([]Requirement, error) {
+	requirements, err := repository.Requirements(ctx, versionID)
+	if err != nil {
+		return nil, err
+	}
+	unresolved := make([]Requirement, 0, len(requirements))
+	for _, requirement := range requirements {
+		if requirement.LatestResponse != nil && requirement.LatestResponse.Decision == RequirementSatisfied {
+			continue
+		}
+		unresolved = append(unresolved, requirement)
+	}
+	return unresolved, nil
+}
+
+func requirementsWithResponses(evaluation Evaluation, responses []RequirementResponse) []Requirement {
 	latest := make(map[string]RequirementResponse, len(responses))
 	for _, response := range responses {
 		latest[response.Policy] = response
@@ -146,9 +161,6 @@ func unresolvedRequirements(evaluation Evaluation, responses []RequirementRespon
 	result := make([]Requirement, 0, len(requirements))
 	for _, requirement := range requirements {
 		response, found := latest[requirement.Policy]
-		if found && response.Decision == RequirementSatisfied {
-			continue
-		}
 		if found {
 			copy := response
 			requirement.LatestResponse = &copy
@@ -156,6 +168,18 @@ func unresolvedRequirements(evaluation Evaluation, responses []RequirementRespon
 		result = append(result, requirement)
 	}
 	return result
+}
+
+func unresolvedRequirements(evaluation Evaluation, responses []RequirementResponse) []Requirement {
+	requirements := requirementsWithResponses(evaluation, responses)
+	unresolved := make([]Requirement, 0, len(requirements))
+	for _, requirement := range requirements {
+		if requirement.LatestResponse != nil && requirement.LatestResponse.Decision == RequirementSatisfied {
+			continue
+		}
+		unresolved = append(unresolved, requirement)
+	}
+	return unresolved
 }
 
 func cloneRequirements(requirements []Requirement) []Requirement {

@@ -46,7 +46,7 @@ func TestRepositoryRecordsGenericEvaluationAndDerivesRequirement(t *testing.T) {
 		t.Fatalf("requirements = %#v", page.Requirements)
 	}
 
-	_, err = repository.RecordRequirementResponse(ctx, intent.RequirementResponseRequest{
+	response, err := repository.RecordRequirementResponse(ctx, intent.RequirementResponseRequest{
 		IdempotencyKey: "satisfy-architecture",
 		VersionID:      proposed.Version.ID,
 		Policy:         "architecture",
@@ -56,5 +56,19 @@ func TestRepositoryRecordsGenericEvaluationAndDerivesRequirement(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("satisfy requirement: %v", err)
+	}
+	requirements, err := repository.Requirements(ctx, proposed.Version.ID)
+	if err != nil {
+		t.Fatalf("inspect Version requirements: %v", err)
+	}
+	if len(requirements) != 1 || requirements[0].LatestResponse == nil || *requirements[0].LatestResponse != response {
+		t.Fatalf("requirements with Response = %#v, want %#v", requirements, response)
+	}
+	unresolved, err := repository.UnresolvedRequirements(ctx, proposed.Version.ID)
+	if err != nil {
+		t.Fatalf("inspect unresolved requirements: %v", err)
+	}
+	if len(unresolved) != 0 {
+		t.Fatalf("unresolved requirements = %#v, want none", unresolved)
 	}
 }

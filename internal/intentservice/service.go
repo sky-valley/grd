@@ -13,6 +13,7 @@ var ErrRepositoryAlreadyInitialized = errors.New("repository intent is already i
 
 type Repository interface {
 	CurrentIntent() intent.Revision
+	Version(ctx context.Context, id intent.VersionID) (intent.Version, bool, error)
 	Propose(ctx context.Context, proposal intent.Proposal) (intent.Proposed, error)
 	Amend(ctx context.Context, request intent.AmendRequest) (intent.Amended, error)
 	ReconcileDependent(ctx context.Context, request intent.ReconcileDependentRequest) (intent.ReconciledDependent, error)
@@ -25,6 +26,7 @@ type Repository interface {
 	EvaluationContext(ctx context.Context, versionID intent.VersionID) (intent.EvaluationContext, error)
 	RecordEvaluation(ctx context.Context, evaluation intent.Evaluation) (intent.Evaluation, error)
 	PendingRequirements(ctx context.Context, query intent.PendingRequirementQuery) (intent.PendingRequirementPage, error)
+	Requirements(ctx context.Context, versionID intent.VersionID) ([]intent.Requirement, error)
 	UnresolvedRequirements(ctx context.Context, versionID intent.VersionID) ([]intent.Requirement, error)
 	RecordRequirementResponse(ctx context.Context, request intent.RequirementResponseRequest) (intent.RequirementResponse, error)
 	RecordReconciliationConflict(ctx context.Context, request intent.ReconciliationConflictRequest) (intent.ReconciliationConflictInspection, error)
@@ -114,6 +116,14 @@ func (service *Service) CurrentIntent(ctx context.Context, repoID string) (inten
 	return repository.CurrentIntent(), nil
 }
 
+func (service *Service) Version(ctx context.Context, repoID string, versionID intent.VersionID) (intent.Version, bool, error) {
+	repository, err := service.resolve(ctx, repoID)
+	if err != nil {
+		return intent.Version{}, false, err
+	}
+	return repository.Version(ctx, versionID)
+}
+
 func (service *Service) PendingEvaluations(ctx context.Context, repoID string, query intent.PendingEvaluationQuery) (intent.PendingEvaluationPage, error) {
 	repository, err := service.resolve(ctx, repoID)
 	if err != nil {
@@ -136,6 +146,14 @@ func (service *Service) Evaluation(ctx context.Context, repoID string, versionID
 		return intent.Evaluation{}, false, err
 	}
 	return repository.Evaluation(ctx, versionID)
+}
+
+func (service *Service) Promotion(ctx context.Context, repoID string, versionID intent.VersionID) (intent.Promoted, bool, error) {
+	repository, err := service.resolve(ctx, repoID)
+	if err != nil {
+		return intent.Promoted{}, false, err
+	}
+	return repository.Promotion(ctx, versionID)
 }
 
 func (service *Service) EvaluationContext(ctx context.Context, repoID string, versionID intent.VersionID) (intent.EvaluationContext, error) {
@@ -168,6 +186,14 @@ func (service *Service) UnresolvedRequirements(ctx context.Context, repoID strin
 		return nil, err
 	}
 	return repository.UnresolvedRequirements(ctx, versionID)
+}
+
+func (service *Service) Requirements(ctx context.Context, repoID string, versionID intent.VersionID) ([]intent.Requirement, error) {
+	repository, err := service.resolve(ctx, repoID)
+	if err != nil {
+		return nil, err
+	}
+	return repository.Requirements(ctx, versionID)
 }
 
 func (service *Service) RecordRequirementResponse(ctx context.Context, repoID string, request intent.RequirementResponseRequest) (intent.RequirementResponse, error) {

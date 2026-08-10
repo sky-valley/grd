@@ -79,6 +79,7 @@ func TestRunServesAcceptedIntentAtReadyControlURL(t *testing.T) {
 			"--trunk", "refs/heads/main",
 			"--evaluator", evaluator,
 			"--listen", "127.0.0.1:0",
+			"--producer", "local:ion",
 			"--poll-interval", "5ms",
 		}, stdoutWriter, &stderr, os.LookupEnv)
 		_ = stdoutWriter.Close()
@@ -90,6 +91,9 @@ func TestRunServesAcceptedIntentAtReadyControlURL(t *testing.T) {
 	}
 	if ready.Control == "" {
 		t.Fatal("readiness receipt has no control URL")
+	}
+	if ready.Producer != "local:ion" {
+		t.Fatalf("readiness producer = %q, want local:ion", ready.Producer)
 	}
 	response, err := http.Get(ready.Control + "/v1/intent")
 	if err != nil {
@@ -172,8 +176,11 @@ func TestParseCommandConfigRejectsInconsistentRuntimeBounds(t *testing.T) {
 	if _, err := parseCommandConfig(spacedGitDir, io.Discard, os.LookupEnv); err == nil {
 		t.Fatal("non-canonical Git directory was accepted")
 	}
-	if _, err := parseCommandConfig(append(base, "--listen", "0.0.0.0:8787"), io.Discard, os.LookupEnv); err == nil {
+	if _, err := parseCommandConfig(append(base, "--listen", "0.0.0.0:8787", "--producer", "local:ion"), io.Discard, os.LookupEnv); err == nil {
 		t.Fatal("non-loopback control listener was accepted")
+	}
+	if _, err := parseCommandConfig(append(base, "--listen", "127.0.0.1:8787"), io.Discard, os.LookupEnv); err == nil {
+		t.Fatal("writable control listener without an explicit producer was accepted")
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 
 	"github.com/sky-valley/grd/internal/controlhttp"
 	"github.com/sky-valley/grd/internal/evaluatorexec"
+	"github.com/sky-valley/grd/internal/principal"
 )
 
 const hostReadySchema = "grd.host-ready/v1"
@@ -28,6 +29,7 @@ type hostReady struct {
 	Intent     string      `json:"intent"`
 	Content    hostContent `json:"content"`
 	Control    string      `json:"control,omitempty"`
+	Producer   string      `json:"producer,omitempty"`
 }
 
 type hostContent struct {
@@ -73,8 +75,16 @@ func run(
 		return fmt.Errorf("read ready state: %w", err)
 	}
 	var listener net.Listener
+	var controlHandler http.Handler
 	controlURL := ""
 	if config.ControlListen != "" {
+		controlHandler, err = controlhttp.NewHandler(controlhttp.Config{
+			Repository: config.RepositoryID,
+			Producer:   config.ControlProducer,
+		}, runtime.Service())
+		if err != nil {
+			return fmt.Errorf("configure local control: %w", err)
+		}
 		listener, err = net.Listen("tcp", config.ControlListen)
 		if err != nil {
 			return fmt.Errorf("listen for local control: %w", err)
@@ -90,12 +100,13 @@ func run(
 			Engine:   current.Content.Engine,
 			Revision: current.Content.Revision,
 		},
-		Control: controlURL,
+		Control:  controlURL,
+		Producer: config.ControlProducer,
 	}); err != nil {
 		return fmt.Errorf("write readiness receipt: %w", err)
 	}
 	if listener != nil {
-		return runControlServer(ctx, runtime, listener, controlhttp.NewHandler(config.RepositoryID, runtime.Service()))
+		return runControlServer(ctx, runtime, listener, controlHandler)
 	}
 	runtime.Run(ctx)
 	return nil
@@ -140,7 +151,8 @@ func runControlServer(ctx context.Context, runtime *singleRepositoryRuntime, lis
 
 type commandConfig struct {
 	singleRepositoryConfig
-	ControlListen string
+	ControlListen   string
+	ControlProducer string
 }
 
 func parseCommandConfig(
@@ -157,6 +169,7 @@ func parseCommandConfig(
 	flags.StringVar(&config.LedgerPath, "ledger", "", "path to the append-only decision ledger")
 	flags.StringVar(&config.TrunkRef, "trunk", "refs/heads/main", "accepted Git branch ref")
 	flags.StringVar(&config.ControlListen, "listen", "", "loopback address for the local control endpoint")
+	flags.StringVar(&config.ControlProducer, "producer", "", "opaque principal attributed to local proposals")
 	flags.StringVar(&config.Evaluator.Executable, "evaluator", "", "external evaluator executable")
 	flags.Var(&evaluatorEnvironment, "evaluator-env", "environment variable name to forward to the evaluator; repeatable")
 	flags.IntVar(&config.Runner.Workers, "workers", 1, "concurrent evaluation workers")
@@ -179,7 +192,7 @@ func parseCommandConfig(
 	if err := validateSingleRepositoryConfig(config.singleRepositoryConfig); err != nil {
 		return commandConfig{}, err
 	}
-	if err := validateControlListen(config.ControlListen); err != nil {
+	if err := validateControlConfig(config.ControlListen, config.ControlProducer); err != nil {
 		return commandConfig{}, err
 	}
 	environment, err := evaluatorEnvironment.resolve(lookupEnv)
@@ -193,13 +206,20 @@ func parseCommandConfig(
 	return config, nil
 }
 
-func validateControlListen(address string) error {
+func validateControlConfig(address string, producer string) error {
 	if address == "" {
+		if producer != "" {
+			return errors.New("producer requires a local control listen address")
+		}
 		return nil
 	}
 	parsed, err := netip.ParseAddrPort(address)
 	if err != nil || !parsed.Addr().IsLoopback() {
 		return errors.New("listen address must be a numeric loopback address and port")
+	}
+	canonical, valid := principal.Canonical(producer)
+	if !valid || canonical != producer {
+		return errors.New("producer must be a canonical principal subject when local control is enabled")
 	}
 	return nil
 }

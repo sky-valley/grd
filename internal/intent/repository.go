@@ -227,6 +227,17 @@ func (repository *Repository) Change(ctx context.Context, id ChangeID) (Change, 
 	return repository.changes.Change(ctx, id)
 }
 
+func (repository *Repository) Version(ctx context.Context, id VersionID) (Version, bool, error) {
+	if id == "" {
+		return Version{}, false, errors.New("version id is required")
+	}
+	version, found, err := repository.changes.Version(ctx, id)
+	if err != nil {
+		return Version{}, false, fmt.Errorf("read Version: %w", err)
+	}
+	return cloneVersion(version), found, nil
+}
+
 func (repository *Repository) InspectChange(ctx context.Context, id ChangeID) (ChangeInspection, error) {
 	change, found, err := repository.changes.Change(ctx, id)
 	if err != nil {
